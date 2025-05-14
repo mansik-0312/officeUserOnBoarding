@@ -13,3 +13,9 @@ class ReferralSerializer(serializers.ModelSerializer):
     class Meta:
         model = Referral
         fields = ['id', 'referred_user_email', 'referrer_email', 'status', 'created_at']
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = UserAccount
+        fields = ['firstName', 'lastName', 'email', 'contactNumber', 'profile_picture_url', 'dateOfBirth',
+                  'username', 'created_at']

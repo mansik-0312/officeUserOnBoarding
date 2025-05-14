@@ -12,7 +12,7 @@ from django.http import JsonResponse
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.exceptions import TokenError
 from django.db.models import Q
-from .serializers import ReferralSerializer
+from .serializers import ReferralSerializer, UserProfileSerializer
 from .models import IsAdmin
 from rest_framework.decorators import authentication_classes
 from .pagination import CustomPagination
@@ -133,9 +133,7 @@ def verify(request):
 def login(request):
     user = request.user
     email = request.data.get('email')
-    print(email)
     password = request.data.get('password')
-    print(password)
     if not email or not password:
         return Response({"error": "Email and password required"}, status=400)
 
@@ -248,6 +246,25 @@ def admin_referral_list(request):
     serializer = ReferralSerializer(result_page, many=True)
     return paginator.get_paginated_response(serializer.data)
 
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def userProfileData(request):
+    auth_header = request.headers.get('Authorization')
+
+    if not auth_header or not auth_header.startswith('Bearer '):
+        return Response({"error": "Authorization token required"}, status=status.HTTP_401_UNAUTHORIZED)
+
+    token_str = auth_header.replace('Bearer ', '').strip()
+
+    try:
+        token = AccessToken(token_str)
+        user = UserAccount.objects.get(id=token['user_id'])
+    except Exception:
+        return Response({"error": "Invalid or expired token"}, status=status.HTTP_401_UNAUTHORIZED)
+
+    serializer = UserProfileSerializer(user)
+    return Response(serializer.data)
 
 # Change Password API
 # Accepts email or username and the new password.(Access token of user is required as permission)

@@ -7,13 +7,10 @@ from typing import cast
 from django.utils import timezone
 from rest_framework.permissions import BasePermission
 
-
-
 class IsAdmin(BasePermission):
     def has_permission(self, request, view):
         # Ensure the user is authenticated and is an admin
         return bool(request.user and request.user.is_authenticated and request.user.is_admin)
-
 
 # Create your models here.
 class UserAccount(AbstractBaseUser):
@@ -32,6 +29,9 @@ class UserAccount(AbstractBaseUser):
     access_token = models.CharField(max_length=500, null=True, blank=True)
     referral_code = models.CharField(max_length=50, null=True, blank=True)
     is_admin = models.BooleanField(default=True)
+    profile_picture_url = models.URLField(max_length=500, null=True, blank=True)
+    created_at = models.DateTimeField(default=timezone.now)  # Add this line
+
 
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = ['username', 'firstName', 'lastName']
