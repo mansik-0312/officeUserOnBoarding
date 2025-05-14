@@ -1,11 +1,13 @@
 from rest_framework import serializers
 from .models import UserAccount, Referral
+from django.contrib.auth import get_user_model
+
+User = get_user_model()
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = UserAccount
         fields = '__all__'
-
 
 class ReferralSerializer(serializers.ModelSerializer):
     referred_user_email = serializers.EmailField(source='referred_user.email', read_only=True)
@@ -19,3 +21,16 @@ class UserProfileSerializer(serializers.ModelSerializer):
         model = UserAccount
         fields = ['firstName', 'lastName', 'email', 'contactNumber', 'profile_picture_url', 'dateOfBirth',
                   'username', 'created_at']
+
+class UpdateProfile(serializers.ModelSerializer):
+    class Meta:
+        model = UserAccount
+        fields = ['firstName', 'lastName', 'dateOfBirth', 'username']
+
+    def validate(self, data):
+        for field in self.initial_data:
+            if field not in self.fields:
+                raise serializers.ValidationError(f"Invalid field : {field}")
+            return data
+
+

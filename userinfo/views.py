@@ -12,10 +12,11 @@ from django.http import JsonResponse
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.exceptions import TokenError
 from django.db.models import Q
-from .serializers import ReferralSerializer, UserProfileSerializer
+from .serializers import ReferralSerializer, UserProfileSerializer, UpdateProfile
 from .models import IsAdmin
 from rest_framework.decorators import authentication_classes
 from .pagination import CustomPagination
+from django.utils import timezone
 
 # Create your views here.
 
@@ -82,7 +83,7 @@ def signup(request):
             try:
                 referral = Referral.objects.get(referral_code=referral_code_input, referred_user__isnull=True) #Validate referral code (must exist and be unused).
                 referral.referred_user = new_user #link referred_user to current user in referral record.
-                referral.status = 'pending' #Set referral status to pending
+                referral.status = 'pending'
                 referral.save()
             except Referral.DoesNotExist:
                 return Response({"error": "Invalid referral code"}, status=400)
@@ -110,7 +111,6 @@ def verify(request):
     try:
         user = UserAccount.objects.get(email=email)
         if str(user.verification_code).strip() == str(user_input_code).strip():
-            # Try to mark referral if it exists — optional
             try:
                 referral = Referral.objects.get(referred_user=user)
                 referral.mark_verified()  # sets status='active' and updates verified_at
@@ -181,7 +181,6 @@ def loginverify(request):
 
     # Generate JWT token
     refresh = RefreshToken.for_user(user)
-    refreshToken = str(refresh)
     accessToken = str(refresh.access_token)
     user.access_token = accessToken
     user.save()
@@ -191,14 +190,12 @@ def loginverify(request):
         "message": "Verified",
         "user_id": user.id,
         "access": accessToken,
-        # "refresh": refreshToken
         }, status=200)
 
 
 @api_view(['POST', 'GET'])
 @permission_classes([IsAdmin])
 def admin_referral_list(request):
-    # Get token from header
     auth_header = request.headers.get('Authorization')
     if not auth_header:
         return Response({"error": "Authorization token required"}, status=status.HTTP_401_UNAUTHORIZED)
@@ -265,6 +262,35 @@ def userProfileData(request):
 
     serializer = UserProfileSerializer(user)
     return Response(serializer.data)
+
+# @api_view(['PATCH'])
+# @permission_classes([IsAuthenticated])
+# def updateProfile(request):
+    # auth_header = request.headers.get('Authorization')
+    #
+    # if not auth_header:
+    #     return Response({"error": "Authorization token required"}, status=status.HTTP_401_UNAUTHORIZED)
+    #
+    # token_str = auth_header.replace('Bearer ', '').strip()
+    #
+    # try:
+    #     token = AccessToken(token_str)
+    #     user = UserAccount.objects.get(id=token['user_id'])
+    # except Exception:
+    #     return Response({"error": "Invalid or expired token"}, status=status.HTTP_401_UNAUTHORIZED)
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def updateUserProfile(request):
+    user = request.user
+
+    serializer = UpdateProfile(user, data=request.data, partial=True)
+
+    if serializer.is_valid():
+        serializer.save(updated_at=timezone.now())
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
 
 # Change Password API
 # Accepts email or username and the new password.(Access token of user is required as permission)
