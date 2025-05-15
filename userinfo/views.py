@@ -12,7 +12,7 @@ from django.http import JsonResponse
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.exceptions import TokenError
 from django.db.models import Q
-from .serializers import ReferralSerializer, UserProfileSerializer, UpdateProfile
+from .serializers import ReferralSerializer, UserProfileSerializer, UpdateProfile, ProfilePictureUploadSerializer
 from .models import IsAdmin
 from rest_framework.decorators import authentication_classes
 from .pagination import CustomPagination
@@ -263,21 +263,7 @@ def userProfileData(request):
     serializer = UserProfileSerializer(user)
     return Response(serializer.data)
 
-# @api_view(['PATCH'])
-# @permission_classes([IsAuthenticated])
-# def updateProfile(request):
-    # auth_header = request.headers.get('Authorization')
-    #
-    # if not auth_header:
-    #     return Response({"error": "Authorization token required"}, status=status.HTTP_401_UNAUTHORIZED)
-    #
-    # token_str = auth_header.replace('Bearer ', '').strip()
-    #
-    # try:
-    #     token = AccessToken(token_str)
-    #     user = UserAccount.objects.get(id=token['user_id'])
-    # except Exception:
-    #     return Response({"error": "Invalid or expired token"}, status=status.HTTP_401_UNAUTHORIZED)
+
 @api_view(['PATCH'])
 @permission_classes([IsAuthenticated])
 def updateUserProfile(request):
@@ -290,6 +276,27 @@ def updateUserProfile(request):
         return Response(serializer.data, status=status.HTTP_200_OK)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def profilePictureUpload(request):
+
+    user = request.user
+
+    serializer = ProfilePictureUploadSerializer(data=request.data)
+
+    if serializer.is_valid():
+        profile_picture = serializer.validated_data['profile_picture_url']
+
+        if user.profile_picture_url:
+            user.profile_picture_url.delete(save=False)
+
+        user.profile_picture_url = profile_picture
+        user.save()
+
+        return Response({'message': 'Profile picture uploaded successfully'})
+    else:
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 # Change Password API

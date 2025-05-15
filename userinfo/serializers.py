@@ -1,3 +1,6 @@
+from pydantic import ValidationError
+from django.core.exceptions import ValidationError
+
 from rest_framework import serializers
 from .models import UserAccount, Referral
 from django.contrib.auth import get_user_model
@@ -33,4 +36,13 @@ class UpdateProfile(serializers.ModelSerializer):
                 raise serializers.ValidationError(f"Invalid field : {field}")
             return data
 
+class ProfilePictureUploadSerializer(serializers.Serializer):
 
+    profile_picture_url = serializers.ImageField()
+
+    def validate_profile_picture_url(self, value):
+
+        max_size = 2
+
+        if value.size > (max_size * 1024 * 1024):
+            raise serializers.ValidationError(f'Image size cannot exceed {max_size} MB')

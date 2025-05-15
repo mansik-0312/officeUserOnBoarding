@@ -29,7 +29,7 @@ class UserAccount(AbstractBaseUser):
     access_token = models.CharField(max_length=500, null=True, blank=True)
     referral_code = models.CharField(max_length=50, null=True, blank=True)
     is_admin = models.BooleanField(default=True)
-    profile_picture_url = models.URLField(max_length=500, null=True, blank=True)
+    profile_picture_url = models.ImageField(upload_to="profilepicture", null=True, blank=True)
     created_at = models.DateTimeField(default=timezone.now)  # Add this line
 
 

@@ -14,7 +14,7 @@ from pathlib import Path
 from datetime import timedelta
 
 
-from django.conf.global_settings import EMAIL_USE_TLS, EMAIL_BACKEND
+from django.conf.global_settings import EMAIL_USE_TLS, EMAIL_BACKEND, MEDIA_URL, MEDIA_ROOT
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -157,3 +157,6 @@ AUTHENTICATION_BACKENDS = [
 ]
 
 AUTH_USER_MODEL = 'userinfo.UserAccount'
+
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
