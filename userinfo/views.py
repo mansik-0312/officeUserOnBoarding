@@ -1,27 +1,38 @@
 from django.contrib.auth.hashers import make_password
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.authentication import SessionAuthentication, BasicAuthentication
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
+from rest_framework.exceptions import ValidationError
+from rest_framework.generics import ListAPIView
+from rest_framework.parsers import JSONParser
+from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from .utils import send_email_to_user, generate_code, generate_referral_code
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
 from rest_framework import status
-from .models import UserAccount, Referral
+from .models import UserAccount, Referral, TermsAndConditions, Follow, Faq
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 from django.http import JsonResponse
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.exceptions import TokenError
 from django.db.models import Q
-from .serializers import ReferralSerializer, UserProfileSerializer, UpdateProfile, ProfilePictureUploadSerializer
+from .serializers import FAQUpdateSerializer, FAQListSerializer, FAQCreateSerializer, FollowSerializer, TermsAndConditionsUpdateSerializer, TermsAndConditionsSerializer, ReferralSerializer, UserProfileSerializer, UpdateProfile, ProfilePictureUploadSerializer
 from .models import IsAdmin
-from rest_framework.decorators import authentication_classes
-from .pagination import CustomPagination
+# from .pagination import CustomPagination
 from django.utils import timezone
+from django.http import HttpResponse
+from decimal import Decimal, InvalidOperation
+from rest_framework import status, permissions
+from django.db import transaction, IntegrityError
+from rest_framework import filters
+from .pagination import CustomTermsPagination
+
 
 # Create your views here.
 
 # Registration API
 # On user registration, send an OTP to the registered email address.
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 @authentication_classes([SessionAuthentication, BasicAuthentication])
@@ -99,6 +110,7 @@ def signup(request):
     except KeyError as e:
         return Response({"error": f"Missing field: {str(e)}"}, status=status.HTTP_400_BAD_REQUEST)
 
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def verify(request):
@@ -128,6 +140,7 @@ def verify(request):
 # Login API
 # Accepts email and password.
 # On successful validation, send an OTP to the user’s registered email for login verification.
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def login(request):
@@ -183,6 +196,7 @@ def loginverify(request):
     refresh = RefreshToken.for_user(user)
     accessToken = str(refresh.access_token)
     user.access_token = accessToken
+    user.refresh_token = refresh
     user.save()
 
     # refresh = RefreshToken.for_user(user)
@@ -190,9 +204,10 @@ def loginverify(request):
         "message": "Verified",
         "user_id": user.id,
         "access": accessToken,
+        "refresh_token": str(refresh)
         }, status=200)
 
-
+@csrf_exempt
 @api_view(['POST', 'GET'])
 @permission_classes([IsAdmin])
 def admin_referral_list(request):
@@ -237,13 +252,13 @@ def admin_referral_list(request):
         }, status=status.HTTP_200_OK)
 
     # Pagination
-    paginator = CustomPagination()
+    paginator = CustomTermsPagination()
     paginator.page_size = page_size
     result_page = paginator.paginate_queryset(referrals, request)
     serializer = ReferralSerializer(result_page, many=True)
     return paginator.get_paginated_response(serializer.data)
 
-
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def userProfileData(request):
@@ -260,7 +275,7 @@ def userProfileData(request):
     except Exception:
         return Response({"error": "Invalid or expired token"}, status=status.HTTP_401_UNAUTHORIZED)
 
-    serializer = UserProfileSerializer(user)
+    serializer = UserProfileSerializer(user, context={'request': request})
     return Response(serializer.data)
 
 
@@ -276,31 +291,90 @@ def updateUserProfile(request):
         return Response(serializer.data, status=status.HTTP_200_OK)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def profilePictureUpload(request):
-
     user = request.user
 
     serializer = ProfilePictureUploadSerializer(data=request.data)
 
     if serializer.is_valid():
         profile_picture = serializer.validated_data['profile_picture_url']
+        print('Uploaded file:', profile_picture)
 
         if user.profile_picture_url:
+            print('Deleting old picture:', user.profile_picture_url.name)
             user.profile_picture_url.delete(save=False)
 
         user.profile_picture_url = profile_picture
         user.save()
 
-        return Response({'message': 'Profile picture uploaded successfully'})
+        # Dynamically build the server URL from request
+        scheme = request.scheme
+        host = request.get_host()
+        server_url = f"{scheme}://{host}"
+
+        image_url = f"{server_url}{user.profile_picture_url.url}" if user.profile_picture_url else None
+        print('Saved new profile picture:', user.profile_picture_url.name)
+
+        return Response({
+            'message': 'Profile picture uploaded successfully',
+            'profile_picture_url': image_url
+        }, status=status.HTTP_200_OK)
     else:
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def logout(request):
+
+    refresh_token = request.data.get('refresh_token')
+
+    if not refresh_token:
+        return Response ({'message': 'Refresh Token is required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        token = RefreshToken(refresh_token)
+        token.blacklist()
+
+        # user = request.user
+        # user.access_token = None
+        # user.save()
+        return Response({'message': 'Logout successful',
+                         'refresh': refresh_token
+                         }, status=status.HTTP_200_OK)
+    except TokenError:
+        return Response({"error": "Invalid token"}, status=status.HTTP_401_UNAUTHORIZED)
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def check_token_status(request):
+    refresh_token = request.data.get("refresh_token")
+    print("Refresh token", refresh_token)
+    if not refresh_token:
+        print("No refresh token provided")
+        return Response({"error": "Refresh token is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        token = RefreshToken(refresh_token)
+        print("Token JTI:", token['jti'])
+        return Response({"message": "Token is valid"}, status=200)
+
+    except TokenError as e:
+        # This includes "Token is blacklisted" or "Token is invalid or expired"
+        print("TokenError:", str(e))
+        return Response({
+            "detail": str(e),
+            "code": "token_not_valid"
+        }, status=status.HTTP_401_UNAUTHORIZED)
 
 
 # Change Password API
 # Accepts email or username and the new password.(Access token of user is required as permission)
+@csrf_exempt
 @api_view(['POST'])
 def changePassword(request):
     # Get data from the request
@@ -350,8 +424,8 @@ def changePassword(request):
 
 # Forgot Password API
 # Accepts user’s email and sends an OTP for password reset.
-@api_view(['POST'])
 @csrf_exempt
+@api_view(['POST'])
 def forgotPassword(request):
     # Try to get email from POST data, then from query params
     email = request.data.get('email') or request.POST.get('email') or request.query_params.get('email')
@@ -371,6 +445,7 @@ def forgotPassword(request):
     send_email_to_user(email, code)
     return JsonResponse({"message": "Verification code sent"}, status=200)
 
+@csrf_exempt
 @api_view(['POST'])
 def forgotPasswordVerify(request):
     email = request.data.get('email')
@@ -391,9 +466,8 @@ def forgotPasswordVerify(request):
     except UserAccount.DoesNotExist:
         return Response({"error": "User not found."}, status=status.HTTP_404_NOT_FOUND)
 
-
-@api_view(['POST'])
 @csrf_exempt
+@api_view(['POST'])
 def setNewPassword(request):
     new_password = request.data.get('new_password')
     confirm_password = request.data.get('confirm_password')
@@ -426,3 +500,405 @@ def setNewPassword(request):
 
     return JsonResponse({"message": "Password updated successfully"}, status=200)
 
+
+@api_view(['POST'])
+@permission_classes([IsAdmin])
+def create_terms_and_conditions(request):
+    content = request.data.get('content')
+    if not content:
+        return Response({"detail": "Content field is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+    max_retries = 5
+    for attempt in range(max_retries):
+        try:
+            with transaction.atomic():
+                last = TermsAndConditions.objects.order_by('-created_at').first()
+
+                if last:
+                    try:
+                        last_version = Decimal(last.version)
+                    except InvalidOperation:
+                        last_version = Decimal('1')
+                    new_version = last_version + Decimal('0.1')
+                    # Format with 1 decimal place, remove trailing zeros (like 1.0 => 1)
+                    new_version_str = f"{new_version.normalize()}"
+                else:
+                    new_version_str = '1'
+
+                term = TermsAndConditions(
+                    content=content,
+                    version=new_version_str,
+                    status='DISABLED'  # Always disabled by default
+                )
+                term.save()
+
+                serializer = TermsAndConditionsSerializer(term)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        except IntegrityError:
+            # Retry if version conflict (unique constraint violation)
+            if attempt == max_retries - 1:
+                return Response({"detail": "Version conflict, please retry."}, status=status.HTTP_409_CONFLICT)
+
+
+@api_view(['PATCH'])
+@permission_classes([IsAdmin])
+def update_terms_and_conditions(request, pk):
+    try:
+        terms = TermsAndConditions.objects.get(pk=pk)
+    except TermsAndConditions.DoesNotExist:
+        return Response({"detail": "Terms and Conditions not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    serializer = TermsAndConditionsUpdateSerializer(terms, data=request.data, partial=True)
+
+    if serializer.is_valid():
+        serializer.save()
+        return Response({"id": terms.id,
+                         "content": terms.content,
+                         "version": str(terms.version),
+                         "status": terms.status})
+    else:
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['DELETE'])
+@permission_classes([IsAdmin])
+def delete_terms_and_conditions(request, pk=None):
+    if pk is None:
+        return Response(
+            {"detail": "Please provide a Terms and Conditions ID to delete."},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        terms = TermsAndConditions.objects.get(pk=pk)
+    except TermsAndConditions.DoesNotExist:
+        return Response(
+            {"detail": "Terms and Conditions not found."},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    response_data = {
+        "message": "Terms and Conditions deleted successfully.",
+        "id": terms.id,
+        "version": str(terms.version)
+    }
+    terms.delete()
+    return Response(response_data, status=status.HTTP_200_OK)
+
+@api_view(['PATCH'])
+@permission_classes([IsAdmin])
+def toggle_terms_status(request, pk):
+    try:
+        terms = TermsAndConditions.objects.get(pk=pk)
+    except TermsAndConditions.DoesNotExist:
+        return Response({"detail": "Terms and Conditions not found."}, status=status.HTTP_404_NOT_FOUND)
+
+    if terms.status == "ENABLED":
+        # Disable this term
+        terms.status = "DISABLED"
+        terms.save()
+        return Response({
+            "message": "Terms and Conditions disabled.",
+            "id": terms.id,
+            "version": str(terms.version),
+            "status": terms.status
+        }, status=status.HTTP_200_OK)
+
+    # Enable this term and disable all others
+    TermsAndConditions.objects.exclude(id=terms.id).update(status="DISABLED")
+    terms.status = "ENABLED"
+    terms.save()
+
+    return Response({
+        "message": "Terms and Conditions enabled successfully.",
+        "id": terms.id,
+        "version": str(terms.version),
+        "status": terms.status
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAdmin])
+def list_terms_and_conditions(request):
+    terms = TermsAndConditions.objects.all()
+
+    # Search filter
+    search_query = request.query_params.get('search')
+    if search_query:
+        terms = terms.filter(
+            Q(content__icontains=search_query) |
+            Q(version__icontains=search_query)
+        )
+
+    # Ordering filter
+    ordering = request.query_params.get('ordering', '-created_at')
+    terms = terms.order_by(ordering)
+
+    # Custom pagination
+    paginator = CustomTermsPagination()
+    paginated_terms = paginator.paginate_queryset(terms, request)
+    serializer = TermsAndConditionsSerializer(paginated_terms, many=True)
+    return paginator.get_paginated_response(serializer.data)
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_active_terms_and_conditions(request):
+    active_terms = TermsAndConditions.objects.filter(status='ENABLED').order_by('-updated_at')
+
+    if not active_terms.exists():
+        return Response(
+            {"detail": "No active Terms and Conditions found."},
+            status=status.HTTP_404_NOT_FOUND
+        )
+
+    data = [
+        {
+            "content": term.content,
+            "version": str(term.version),
+            "updated_at": term.updated_at
+        }
+        for term in active_terms
+    ]
+
+    return Response(data, status=status.HTTP_200_OK)
+
+
+
+
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def follow_user(request, user_id=None):
+
+    if user_id is None:
+        return Response({"detail": "Please provide user ID to follow."}, status=status.HTTP_400_BAD_REQUEST)
+
+    if not user_id.isdigit():
+        return Response({'error': 'Invalid user ID.'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        following_user = UserAccount.objects.get(id=user_id)
+    except UserAccount.DoesNotExist:
+        return Response({'details': 'User does not exists'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if request.user.id == following_user.id:
+        return Response({'error': 'You cannot follow yourself'}, status=status.HTTP_400_BAD_REQUEST)
+
+    if Follow.objects.filter(follower=request.user, following=following_user).exists():
+        return Response({'error': 'Already follows this user'})
+
+    follow = Follow(follower=request.user, following=following_user)
+    try:
+        follow.save()
+    except ValidationError as e:
+        return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    serializer = FollowSerializer(follow)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def unfollow_user(request, user_id=None):
+    if user_id is None:
+        return Response(
+            {"detail": "Please provide a user ID to unfollow"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    if not user_id.isdigit():
+        return Response({'error': 'Invalid User ID'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        following_user = UserAccount.objects.get(id=int(user_id))
+    except UserAccount.DoesNotExist:
+        return Response({'error': 'User does not exists'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        follow = Follow.objects.get(follower=request.user, following=following_user)
+        follow.delete()
+        return Response({'success': f'Unfollowed user {following_user.firstName, following_user.email}'}, status=status.HTTP_200_OK)
+    except Follow.DoesNotExist:
+        return Response({'error': 'You are not following this user'}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_my_follower(request):
+
+    follow = Follow.objects.filter(follower=request.user)
+    if not follow.exists():
+        return Response({'error': 'You have no follower'})
+
+    serializer = FollowSerializer(follow, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def list_my_following(request):
+
+    follow = Follow.objects.filter(following=request.user)
+    if not follow.exists():
+        return Response({'error': 'You are not following anyone'})
+
+    serializer = FollowSerializer(follow, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([IsAdmin])
+def admin_list_follows(request):
+    search = request.GET.get("search", "")
+    queryset = Follow.objects.select_related("follower", "following").all()
+
+    if search:
+        queryset = queryset.filter(
+            Q(follower__username__icontains=search) |
+            Q(follower__email__icontains=search) |
+            Q(following__username__icontains=search) |
+            Q(following__email__icontains=search)
+        )
+
+    paginator = CustomTermsPagination()
+    result_page = paginator.paginate_queryset(queryset, request)
+    serializer = FollowSerializer(result_page, many=True)
+    return paginator.get_paginated_response(serializer.data)
+
+@api_view(['DELETE'])
+@permission_classes([IsAdmin])
+def delete_follow(request, user_id=None):
+    if user_id is None:
+        return Response(
+            {"detail": "Please provide a user ID to delete follow"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    if not user_id.isdigit():
+        return Response({'error': 'Invalid User ID'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        follow = Follow.objects.get(id=user_id)
+    except Follow.DoesNotExist:
+        return Response({'error': 'Follow relationship not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    follow.delete()
+    return Response({'details': 'Follow relationship deleted successfully'}, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([IsAdmin])
+def admin_user_follow_data(request, user_id=None):
+    if user_id is None:
+        return Response(
+            {"detail": "Please provide a user ID to delete follow"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    if not user_id.isdigit():
+        return Response({'error': 'Invalid User ID'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        user = UserAccount.objects.get(id=user_id)
+    except UserAccount.DoesNotExist:
+        return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    follower = Follow.objects.filter(follower=user)
+    following = Follow.objects.filter(following=user)
+
+    data = {
+        'follower': FollowSerializer(follower, many=True).data,
+        'following': FollowSerializer(following, many=True).data
+    }
+    return Response(data, status=status.HTTP_200_OK)
+
+@api_view(['POST'])
+@permission_classes([IsAdmin])
+def create_faq(request):
+    serializer = FAQCreateSerializer(data=request.data, context={'request': request})
+    if serializer.is_valid():
+        faq = serializer.save()
+        return Response({
+            'message': 'FAQ created successfully.',
+            'faq': {
+                'id': faq.id,
+                'question': faq.question,
+                'answer': faq.answer,
+                'created_by': faq.created_by.username,
+                'created_at': faq.created_at
+            }
+        }, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def list_faq(request):
+    search = request.GET.get('search', '')
+    sort_order = request.GET.get('sort', 'desc')
+
+    faqs = Faq.objects.all()
+
+    if search:
+        faqs = faqs.filter(question__icontains=search)
+
+    # Sort by creation time (recommended)
+    if sort_order == 'asc':
+        faqs = faqs.order_by('created_at')
+    else:
+        faqs = faqs.order_by('-created_at')
+
+    serializer = FAQListSerializer(faqs, many=True)
+    return Response(serializer.data)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def single_faq(request, id):
+    try:
+        id = int(id)  # Ensures ID is an integer
+    except (ValueError, TypeError):
+        return Response(
+            {'error': 'Invalid FAQ ID. ID must be an integer.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        faq = Faq.objects.get(pk=id)
+    except Faq.DoesNotExist:
+        return Response(
+            {'error': 'FAQ not found'}, status=status.HTTP_404_NOT_FOUND
+        )
+
+    serializer = FAQListSerializer(faq)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+@api_view(['PATCH'])
+@permission_classes([IsAdmin])  # Note: changed IsAdmin to IsAdminUser for standard DRF usage
+def update_faq(request, id):
+    try:
+        faq = Faq.objects.get(pk=id)
+    except Faq.DoesNotExist:
+        return Response(
+            {'error': 'FAQ not found'}, status=status.HTTP_404_NOT_FOUND
+        )
+
+    serializer = FAQUpdateSerializer(faq, data=request.data, partial=True, context={'request': request})
+    if serializer.is_valid():
+        updated_faq = serializer.save(updated_by=request.user)
+        return Response({
+            'message': 'FAQ updated successfully.',
+            'faq': {
+                'id': updated_faq.id,
+                'question': updated_faq.question,
+                'answer': updated_faq.answer,
+                'updated_by': updated_faq.updated_by.username,
+                'updated_at': updated_faq.updated_at
+            }
+        }, status=status.HTTP_200_OK)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['DELETE'])
+@permission_classes([IsAdmin])
+def delete_faq(request, id):
+    try:
+        faq = Faq.objects.get(pk=id)
+        faq.delete()
+        return Response({'message': 'FAQ deleted successfully.'}, status=status.HTTP_200_OK)
+    except Faq.DoesNotExist:
+        return Response({'error': 'FAQ not found'}, status=status.HTTP_404_NOT_FOUND)
