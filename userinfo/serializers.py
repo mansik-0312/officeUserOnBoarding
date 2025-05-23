@@ -1,8 +1,6 @@
-from pydantic import ValidationError
-from django.core.exceptions import ValidationError
-
 from rest_framework import serializers
-from .models import UserAccount, Referral, TermsAndConditions, Follow, Faq
+from .models import (UserAccount, Referral, TermsAndConditions, Follow, Faq,
+                     ContactUs, StaticContent)
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -132,3 +130,29 @@ class FAQUpdateSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         instance.updated_by = self.context['request'].user
         return super().update(instance, validated_data)
+
+
+class ContactUsSerializer(serializers.ModelSerializer):
+    first_name = serializers.CharField(required=True, allow_blank=False)
+    last_name = serializers.CharField(required=True, allow_blank=False)
+    email = serializers.EmailField(required=True, allow_blank=False)
+    contact_number = serializers.CharField(required=True, allow_blank=False)
+    message = serializers.CharField(required=True, allow_blank=False)
+
+    class Meta:
+        model = ContactUs
+        fields = ['first_name', 'last_name', 'email', 'contact_number', 'message', 'created_at']
+        read_only_fields = ['created_at']
+
+    def validate_contact_number(self, value):
+        if not value.isdigit():
+            raise serializers.ValidationError('Contact number should be numeric')
+        return value
+
+
+class StaticContentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StaticContent
+        fields = ['flag', 'content']
+        read_only_fields = ['flag']
+

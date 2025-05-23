@@ -1,32 +1,28 @@
 from django.contrib.auth.hashers import make_password
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.authentication import SessionAuthentication, BasicAuthentication
-from rest_framework.decorators import api_view, permission_classes, authentication_classes, parser_classes
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.exceptions import ValidationError
-from rest_framework.generics import ListAPIView
-from rest_framework.parsers import JSONParser
-from rest_framework_simplejwt.token_blacklist.models import BlacklistedToken
 from .utils import send_email_to_user, generate_code, generate_referral_code
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated, AllowAny, IsAdminUser
-from rest_framework import status
-from .models import UserAccount, Referral, TermsAndConditions, Follow, Faq
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from .models import (UserAccount, Referral, TermsAndConditions, Follow, Faq, ContactUs, StaticContent)
 from rest_framework_simplejwt.tokens import RefreshToken, AccessToken
 from django.http import JsonResponse
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.exceptions import TokenError
 from django.db.models import Q
-from .serializers import FAQUpdateSerializer, FAQListSerializer, FAQCreateSerializer, FollowSerializer, TermsAndConditionsUpdateSerializer, TermsAndConditionsSerializer, ReferralSerializer, UserProfileSerializer, UpdateProfile, ProfilePictureUploadSerializer
+from .serializers import (StaticContentSerializer, ContactUsSerializer,FAQUpdateSerializer,
+                          FAQListSerializer, FAQCreateSerializer, FollowSerializer,
+                          TermsAndConditionsUpdateSerializer, TermsAndConditionsSerializer,
+                          ReferralSerializer, UserProfileSerializer, UpdateProfile,
+                          ProfilePictureUploadSerializer)
 from .models import IsAdmin
-# from .pagination import CustomPagination
 from django.utils import timezone
-from django.http import HttpResponse
 from decimal import Decimal, InvalidOperation
-from rest_framework import status, permissions
+from rest_framework import status
 from django.db import transaction, IntegrityError
-from rest_framework import filters
 from .pagination import CustomTermsPagination
-
 
 # Create your views here.
 
@@ -211,6 +207,7 @@ def loginverify(request):
 @api_view(['POST', 'GET'])
 @permission_classes([IsAdmin])
 def admin_referral_list(request):
+
     auth_header = request.headers.get('Authorization')
     if not auth_header:
         return Response({"error": "Authorization token required"}, status=status.HTTP_401_UNAUTHORIZED)
@@ -339,9 +336,6 @@ def logout(request):
         token = RefreshToken(refresh_token)
         token.blacklist()
 
-        # user = request.user
-        # user.access_token = None
-        # user.save()
         return Response({'message': 'Logout successful',
                          'refresh': refresh_token
                          }, status=status.HTTP_200_OK)
@@ -663,6 +657,101 @@ def get_active_terms_and_conditions(request):
 
     return Response(data, status=status.HTTP_200_OK)
 
+@api_view(['POST'])
+@permission_classes([IsAdmin])
+def create_faq(request):
+    serializer = FAQCreateSerializer(data=request.data, context={'request': request})
+    if serializer.is_valid():
+        faq = serializer.save()
+        return Response({
+            'message': 'FAQ created successfully.',
+            'faq': {
+                'id': faq.id,
+                'question': faq.question,
+                'answer': faq.answer,
+                'created_by': faq.created_by.username,
+                'created_at': faq.created_at
+            }
+        }, status=status.HTTP_201_CREATED)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def list_faq(request):
+    search = request.GET.get('search', '')
+    sort_order = request.GET.get('sort', 'desc')
+
+    faqs = Faq.objects.all()
+
+    if search:
+        faqs = faqs.filter(question__icontains=search)
+
+    # Sort by creation time (recommended)
+    if sort_order == 'asc':
+        faqs = faqs.order_by('created_at')
+    else:
+        faqs = faqs.order_by('-created_at')
+
+    serializer = FAQListSerializer(faqs, many=True)
+    return Response(serializer.data)
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def single_faq(request, id):
+    try:
+        id = int(id)  # Ensures ID is an integer
+    except (ValueError, TypeError):
+        return Response(
+            {'error': 'Invalid FAQ ID. ID must be an integer.'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        faq = Faq.objects.get(pk=id)
+    except Faq.DoesNotExist:
+        return Response(
+            {'error': 'FAQ not found'}, status=status.HTTP_404_NOT_FOUND
+        )
+
+    serializer = FAQListSerializer(faq)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+@api_view(['PATCH'])
+@permission_classes([IsAdmin])  # Note: changed IsAdmin to IsAdminUser for standard DRF usage
+def update_faq(request, id):
+    try:
+        faq = Faq.objects.get(pk=id)
+    except Faq.DoesNotExist:
+        return Response(
+            {'error': 'FAQ not found'}, status=status.HTTP_404_NOT_FOUND
+        )
+
+    serializer = FAQUpdateSerializer(faq, data=request.data, partial=True, context={'request': request})
+    if serializer.is_valid():
+        updated_faq = serializer.save(updated_by=request.user)
+        return Response({
+            'message': 'FAQ updated successfully.',
+            'faq': {
+                'id': updated_faq.id,
+                'question': updated_faq.question,
+                'answer': updated_faq.answer,
+                'updated_by': updated_faq.updated_by.username,
+                'updated_at': updated_faq.updated_at
+            }
+        }, status=status.HTTP_200_OK)
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(['DELETE'])
+@permission_classes([IsAdmin])
+def delete_faq(request, id):
+    try:
+        faq = Faq.objects.get(pk=id)
+        faq.delete()
+        return Response({'message': 'FAQ deleted successfully.'}, status=status.HTTP_200_OK)
+    except Faq.DoesNotExist:
+        return Response({'error': 'FAQ not found'}, status=status.HTTP_404_NOT_FOUND)
+
+
 
 
 
@@ -770,11 +859,11 @@ def admin_list_follows(request):
 def delete_follow(request, user_id=None):
     if user_id is None:
         return Response(
-            {"detail": "Please provide a user ID to delete follow"},
+            {"detail": "Please provide a user ID to delete follow relationship"},
             status=status.HTTP_400_BAD_REQUEST
         )
     if not user_id.isdigit():
-        return Response({'error': 'Invalid User ID'}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({'error': 'Invalid User ID'}, status=status.HTTP_404_NOT_FOUND)
 
     try:
         follow = Follow.objects.get(id=user_id)
@@ -790,7 +879,7 @@ def admin_user_follow_data(request, user_id=None):
     if user_id is None:
         return Response(
             {"detail": "Please provide a user ID to delete follow"},
-            status=status.HTTP_400_BAD_REQUEST
+            status=status.HTTP_404_NOT_FOUND
         )
     if not user_id.isdigit():
         return Response({'error': 'Invalid User ID'}, status=status.HTTP_400_BAD_REQUEST)
@@ -809,96 +898,112 @@ def admin_user_follow_data(request, user_id=None):
     }
     return Response(data, status=status.HTTP_200_OK)
 
+
 @api_view(['POST'])
-@permission_classes([IsAdmin])
-def create_faq(request):
-    serializer = FAQCreateSerializer(data=request.data, context={'request': request})
+@permission_classes([AllowAny])
+def send_contact_us_query(request):
+    serializer = ContactUsSerializer(data=request.data)
     if serializer.is_valid():
-        faq = serializer.save()
+        if request.user.is_authenticated:
+            serializer.save(user=request.user)
+        else:
+            serializer.save()
         return Response({
-            'message': 'FAQ created successfully.',
-            'faq': {
-                'id': faq.id,
-                'question': faq.question,
-                'answer': faq.answer,
-                'created_by': faq.created_by.username,
-                'created_at': faq.created_at
-            }
+            'details': 'Message received successfully.',
+            'contact_us': serializer.data
         }, status=status.HTTP_201_CREATED)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-@api_view(['GET'])
-@permission_classes([AllowAny])
-def list_faq(request):
-    search = request.GET.get('search', '')
-    sort_order = request.GET.get('sort', 'desc')
-
-    faqs = Faq.objects.all()
-
-    if search:
-        faqs = faqs.filter(question__icontains=search)
-
-    # Sort by creation time (recommended)
-    if sort_order == 'asc':
-        faqs = faqs.order_by('created_at')
-    else:
-        faqs = faqs.order_by('-created_at')
-
-    serializer = FAQListSerializer(faqs, many=True)
-    return Response(serializer.data)
 
 @api_view(['GET'])
-@permission_classes([AllowAny])
-def single_faq(request, id):
-    try:
-        id = int(id)  # Ensures ID is an integer
-    except (ValueError, TypeError):
-        return Response(
-            {'error': 'Invalid FAQ ID. ID must be an integer.'},
-            status=status.HTTP_400_BAD_REQUEST
-        )
+@permission_classes([IsAuthenticated])
+def list_contact_messages_user(request):
+    contact_messages = ContactUs.objects.filter(user=request.user).order_by('-created_at')
 
-    try:
-        faq = Faq.objects.get(pk=id)
-    except Faq.DoesNotExist:
-        return Response(
-            {'error': 'FAQ not found'}, status=status.HTTP_404_NOT_FOUND
-        )
+    if not contact_messages.exists():
+        return Response({'detail': 'You have not submitted any contact messages yet.'},
+                        status=status.HTTP_404_NOT_FOUND)
 
-    serializer = FAQListSerializer(faq)
+    serializer = ContactUsSerializer(contact_messages, many=True)
     return Response(serializer.data, status=status.HTTP_200_OK)
 
-@api_view(['PATCH'])
-@permission_classes([IsAdmin])  # Note: changed IsAdmin to IsAdminUser for standard DRF usage
-def update_faq(request, id):
-    try:
-        faq = Faq.objects.get(pk=id)
-    except Faq.DoesNotExist:
-        return Response(
-            {'error': 'FAQ not found'}, status=status.HTTP_404_NOT_FOUND
-        )
 
-    serializer = FAQUpdateSerializer(faq, data=request.data, partial=True, context={'request': request})
+@api_view(['GET'])
+@permission_classes([IsAdmin])
+def list_contact_messages_admin(request):
+    contact_messages = ContactUs.objects.all().order_by('-created_at')
+
+    if not contact_messages.exists():
+        return Response({'detail': 'You have not submitted any contact messages yet.'},
+                        status=status.HTTP_404_NOT_FOUND)
+
+    serializer = ContactUsSerializer(contact_messages, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)
+
+@api_view(['GET'])
+@permission_classes([IsAdmin])
+def view_all_submitted_queries(request):
+    queryset = ContactUs.objects.all()
+
+    search = request.GET.get('search')
+
+    if search:
+        queryset = queryset.filter(
+            Q(first_name__icontains = search) |
+            Q(last_name__icontains = search) |
+            Q(email__icontains = search) |
+            Q(contact_number__icontains = search) |
+            Q(message__icontains = search)
+        )
+        if not queryset.exists():
+            return Response({'error': 'search not found'}, status=status.HTTP_404_NOT_FOUND)
+
+    sender_type = request.GET.get('sender')
+    if sender_type == 'user':
+        queryset = queryset.filter(user__isnull = False)
+    elif sender_type == 'quest':
+        queryset = queryset.filter(user__isnull = True)
+
+    sort = request.GET.get('sort', 'desc')
+    if sort == 'asc':
+        queryset = queryset.order_by('created_at')
+    else:
+        queryset = queryset.order_by('-created_at')
+
+    paginator = CustomTermsPagination()
+    result_page = paginator.paginate_queryset(queryset, request)
+    serializer = ContactUsSerializer(result_page, many=True)
+    return paginator.get_paginated_response(serializer.data)
+
+@api_view(['POST'])
+@permission_classes([IsAdmin])
+def update_content(request, flag=None):
+
+    if not flag:
+        return Response({'error': 'Please provide a flag (e.g., privacy_policy or about_us)'}, status=400)
+
+    try:
+        content_obj = StaticContent.objects.get(flag=flag)
+    except StaticContent.DoesNotExist:
+        return Response({'error': 'Content for this flag does not exist'}, status=status.HTTP_404_NOT_FOUND)
+
+    serializer = StaticContentSerializer(content_obj, data=request.data, partial=True)
     if serializer.is_valid():
-        updated_faq = serializer.save(updated_by=request.user)
-        return Response({
-            'message': 'FAQ updated successfully.',
-            'faq': {
-                'id': updated_faq.id,
-                'question': updated_faq.question,
-                'answer': updated_faq.answer,
-                'updated_by': updated_faq.updated_by.username,
-                'updated_at': updated_faq.updated_at
-            }
-        }, status=status.HTTP_200_OK)
+        serializer.save()
+        return Response({'message': 'Content update successfully'}, status=status.HTTP_200_OK)
     return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-@api_view(['DELETE'])
-@permission_classes([IsAdmin])
-def delete_faq(request, id):
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def get_content(request, flag=None):
+
+    if not flag:
+        return Response({'error': 'Please provide a flag (e.g., privacy_policy or about_us)'}, status=400)
+
     try:
-        faq = Faq.objects.get(pk=id)
-        faq.delete()
-        return Response({'message': 'FAQ deleted successfully.'}, status=status.HTTP_200_OK)
-    except Faq.DoesNotExist:
-        return Response({'error': 'FAQ not found'}, status=status.HTTP_404_NOT_FOUND)
+        content_obj = StaticContent.objects.filter(flag=flag)
+    except:
+        return Response({'error': 'Content for this flag does not exist'}, status=status.HTTP_404_NOT_FOUND)
+
+    serializer = StaticContentSerializer(content_obj, many=True)
+    return Response(serializer.data, status=status.HTTP_200_OK)

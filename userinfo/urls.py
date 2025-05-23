@@ -4,7 +4,6 @@ from rest_framework_simplejwt.views import (
     TokenObtainPairView,
     TokenRefreshView,
 )
-from .views import update_terms_and_conditions,admin_referral_list, userProfileData, updateUserProfile, profilePictureUpload, create_terms_and_conditions
 
 urlpatterns= [
     path("signup/", views.signup, name='signup'),
@@ -48,4 +47,13 @@ urlpatterns= [
     path('api/faqs/<str:id>/', views.single_faq, name='returns_single_faq'),
     path('api/faqs/<int:id>/update/', views.update_faq, name='update_faq'),
     path('api/faqs/<int:id>/delete/', views.delete_faq, name='delete_faq'),
+    path('api/contact_us/', views.send_contact_us_query, name='contact_us'),
+    path('api/list_contact_messages/', views.list_contact_messages_user, name='list_contact_messages_user'),
+    path('api/admin/list_contact_messages/', views.list_contact_messages_admin, name='list_contact_messages_user'),
+    path('api/admin/view_all_submitted_queries/', views.view_all_submitted_queries, name='list_of_submitted_queries'),
+    path('api/admin/update_content/<str:flag>/', views.update_content, name='update_content'),
+    path('api/admin/update_content/', views.update_content, name='update_content'),
+    path('api/get_content/<str:flag>/', views.get_content, name='get_content'),
+    path('api/get_content/', views.get_content, name='get_content'),
+
 ]

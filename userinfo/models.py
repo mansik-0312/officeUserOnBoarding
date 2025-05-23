@@ -1,8 +1,6 @@
 from django.db import models
-from django.contrib.auth.hashers import make_password
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 import uuid
-from django.db.models import ForeignKey
 from typing import cast
 from django.utils import timezone
 from pydantic import ValidationError
@@ -156,4 +154,27 @@ class Faq(models.Model):
     def __str__(self):
         return self.question
 
+class ContactUs(models.Model):
+    user = models.ForeignKey(UserAccount, on_delete=models.CASCADE,null=True, blank=True, related_name='contact_queries')
+    first_name = models.CharField(max_length=50)
+    last_name = models.CharField(max_length=50)
+    email = models.EmailField()
+    contact_number = models.CharField(max_length=20)
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
 
+    def __str__(self):
+        return f"{self.first_name} {self.last_name}"
+
+class StaticContent(models.Model):
+    PRIVACY_POLICY = 'privacy_policy'
+    ABOUT_US = 'about_us'
+    FLAG_CHOICES = [
+        (PRIVACY_POLICY, 'Privacy Policy'),
+        (ABOUT_US, 'About Us')
+    ]
+    flag = models.CharField(max_length=20, choices=FLAG_CHOICES, unique=True)
+    content = models.TextField()
+
+    def __str__(self):
+        return self.flag
